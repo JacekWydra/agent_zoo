@@ -52,15 +52,44 @@ Agent Zoo is a modular Python repository providing building blocks for LLM agent
   - Format conversion for all providers
   - Centralized execution with validation
 
+#### Memory System (`src/agent_zoo/core/memory/`)
+- **Memory Items** (`items.py`)
+  - `BaseMemoryItem` with common fields and metadata
+  - `WorkingMemoryItem` - short-term, task-relevant memories
+  - `SemanticMemoryItem` - long-term facts and knowledge
+  - `EpisodicMemoryItem` - experiences with temporal context
+  - `ProceduralMemoryItem` - skills and procedures
+  
+- **Core Memory** (`memory.py`)
+  - ChromaDB as single source of truth
+  - Vector similarity search with embeddings
+  - Relevance calculation (similarity + importance + recency)
+  - Memory consolidation and lifecycle management
+  - Type validation enforcement
+  
+- **Memory Routing** (`router.py`)
+  - `LLMMemoryRouter` for intelligent classification
+  - `SimpleRouter` as pattern-based fallback
+  - Routing decisions with confidence scores
+  - Caching support for performance
+  
+- **Memory Manager** (`manager.py`)
+  - High-level orchestration layer
+  - Unified observe/recall/get_context interface
+  - Automatic routing with manual override option
+  - Task management integration
+  - Auto-consolidation with configurable intervals
+
 #### Testing Framework (`tests/`)
 - **Comprehensive Test Suite**
   - Unit tests for all components
   - Integration tests for tool system
+  - Memory system tests (128 tests, 90-100% coverage)
   - Shared fixtures in `conftest.py`
   - Granular folder structure for future expansion
 
 ### 🚧 In Progress
-- Memory systems (working, semantic, episodic, procedural)
+- Agent implementations (ReAct, CoT)
 
 ### ⏳ Pending
 - Core utilities (async helpers, monitoring, caching)
@@ -116,6 +145,9 @@ Agent Zoo is a modular Python repository providing building blocks for LLM agent
 - **Pydantic v2**: Field descriptions are often required, not optional
 - **Async/Sync Duality**: Providing both async and sync interfaces increases usability
 - **Rate Limiting**: Multiple strategies can be composed for sophisticated control
+- **Memory Architecture**: ChromaDB as single source of truth simplifies consistency
+- **Routing Intelligence**: LLM-based routing outperforms rule-based for content classification
+- **Test Mocking**: Mock LLM clients need careful pattern matching to avoid false positives
 
 ## Architecture Decisions
 
@@ -130,6 +162,14 @@ The tool system was designed with flexibility in mind:
 - Centralized state in `AgentState` class
 - State snapshots for debugging and rollback
 - Clear separation between configuration and runtime state
+
+### Memory System Design
+The memory system uses a layered architecture:
+- **ChromaDB Core**: Vector store as single source of truth
+- **Type-Specific Items**: Distinct memory types with specific metadata
+- **Intelligent Routing**: LLM-based classification with fallback patterns
+- **Manager Orchestration**: High-level interface with auto/manual modes
+- **BaseAgent Integration**: Dual-mode support (with/without memory)
 
 ### Async-First Design
 - All I/O operations are async by default
