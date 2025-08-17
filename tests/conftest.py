@@ -240,3 +240,181 @@ def populated_tool_registry(tool_registry, simple_tool):
     tool_registry.register(search_tool)
 
     return tool_registry
+
+
+# Memory System Fixtures
+@pytest.fixture
+def mock_llm_client():
+    """Mock LLM client that returns deterministic routing decisions."""
+    import json
+    
+    class MockLLMClient:
+        async def generate(self, prompt: str, max_tokens: int = 150, temperature: float = 0.3) -> str:
+            # Extract the actual content being classified from the prompt
+            # Look for "Content to classify: " line
+            content_line = ""
+            for line in prompt.split('\n'):
+                if "content to classify:" in line.lower():
+                    content_line = line.lower()
+                    break
+            
+            # For query routing (different prompt format)
+            if "query:" in prompt.lower() and "which memory types" in prompt.lower():
+                return json.dumps({
+                    "types": ["WORKING", "SEMANTIC"],
+                    "reasoning": "General query"
+                })
+            
+            # Check patterns in the actual content, not the full prompt
+            # Check for procedural content
+            if "how to" in content_line or "steps:" in content_line or "procedure:" in content_line or "instructions:" in content_line:
+                return json.dumps({
+                    "type": "PROCEDURAL",
+                    "confidence": 0.85,
+                    "reasoning": "Contains procedural knowledge"
+                })
+            # Check for episodic content
+            elif "remember" in content_line or "yesterday" in content_line or "happened" in content_line or "experienced" in content_line:
+                return json.dumps({
+                    "type": "EPISODIC",
+                    "confidence": 0.8,
+                    "reasoning": "Contains experiential information"
+                })
+            # Check for semantic/factual content  
+            elif "capital of" in content_line or "fact" in content_line or "definition" in content_line:
+                return json.dumps({
+                    "type": "SEMANTIC",
+                    "confidence": 0.9,
+                    "reasoning": "Contains factual information"
+                })
+            else:
+                return json.dumps({
+                    "type": "WORKING",
+                    "confidence": 0.7,
+                    "reasoning": "Default to working memory"
+                })
+    
+    return MockLLMClient()
+
+
+@pytest.fixture
+def memory_manager_config():
+    """Create MemoryManagerConfig with test settings."""
+    from agent_zoo.core.memory.manager import MemoryManagerConfig
+    
+    return MemoryManagerConfig(
+        persist_directory=None,  # In-memory for tests
+        use_llm_router=True,
+        cache_routing_decisions=True,
+        max_context_tokens=1000,
+        default_search_results=5,
+        auto_capture=True,
+        capture_messages=True,
+        auto_consolidate=False,  # Disable for predictable tests
+        consolidation_interval_seconds=300,
+    )
+
+
+@pytest.fixture
+def sample_working_item():
+    """Create a WorkingMemoryItem for testing."""
+    from agent_zoo.core.memory.items import WorkingMemoryItem
+    from datetime import datetime, timedelta
+    
+    return WorkingMemoryItem(
+        content="Current task: analyzing data",
+        importance=7.0,
+        is_active=True,
+        priority=8.0,
+        task_id="task_123",
+        expires_at=datetime.now() + timedelta(hours=1),
+        token_count=10,
+        source="user_input",
+        related_items=["item_1", "item_2"],
+    )
+
+
+@pytest.fixture
+def sample_semantic_item():
+    """Create a SemanticMemoryItem for testing."""
+    from agent_zoo.core.memory.items import SemanticMemoryItem
+    
+    return SemanticMemoryItem(
+        content="Paris is the capital of France",
+        importance=9.0,
+        concepts=["Paris", "France", "capital"],
+        confidence=1.0,
+        verified=True,
+        source="encyclopedia",
+        source_reliability=0.95,
+        domain="geography",
+        category="capitals",
+    )
+
+
+@pytest.fixture
+def sample_episodic_item():
+    """Create an EpisodicMemoryItem for testing."""
+    from agent_zoo.core.memory.items import EpisodicMemoryItem
+    from datetime import datetime
+    
+    return EpisodicMemoryItem(
+        content="User asked about weather and I provided forecast",
+        importance=5.0,
+        event_type="conversation",
+        event_time=datetime.now(),
+        duration_seconds=30.5,
+        sequence_number=1,
+        participants=["user", "assistant"],
+        location="chat_session",
+        emotional_valence=0.2,
+        significance=6.0,
+        outcomes=["weather_info_provided"],
+        lessons_learned=["user_prefers_detailed_forecasts"],
+    )
+
+
+@pytest.fixture
+def sample_procedural_item():
+    """Create a ProceduralMemoryItem for testing."""
+    from agent_zoo.core.memory.items import ProceduralMemoryItem
+    
+    return ProceduralMemoryItem(
+        content="How to make coffee",
+        importance=6.0,
+        procedure_name="Make Coffee",
+        steps=[
+            {"step": 1, "action": "Boil water"},
+            {"step": 2, "action": "Add coffee grounds"},
+            {"step": 3, "action": "Pour hot water"},
+            {"step": 4, "action": "Wait 4 minutes"},
+            {"step": 5, "action": "Serve"},
+        ],
+        prerequisites=["coffee_beans", "hot_water"],
+        required_tools=["coffee_maker", "mug"],
+        complexity=3.0,
+        estimated_duration=300.0,
+        success_rate=0.95,
+        execution_count=20,
+        domain="culinary",
+        skill_type="beverage_preparation",
+        variations=["french_press", "espresso"],
+        common_errors=["water_too_hot", "over_extraction"],
+    )
+
+
+@pytest.fixture
+def mock_embedding_function():
+    """Mock embedding function that returns fixed vectors."""
+    class MockEmbeddingFunction:
+        def __call__(self, texts: list[str]) -> list[list[float]]:
+            # Return fixed-size embeddings based on text hash for consistency
+            embeddings = []
+            for text in texts:
+                # Create a deterministic embedding based on text
+                hash_val = hash(text) % 1000
+                embedding = [hash_val / 1000.0] * 384  # Match all-MiniLM-L6-v2 dimension
+                embeddings.append(embedding)
+            return embeddings
+    
+    return MockEmbeddingFunction()
