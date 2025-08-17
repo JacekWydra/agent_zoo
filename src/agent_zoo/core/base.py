@@ -5,12 +5,14 @@ Base interfaces and abstractions for agent implementations.
 import asyncio
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar, Optional
 
 import structlog
 from pydantic import BaseModel, Field
 
 from agent_zoo.interfaces.state import AgentState, AgentStatus
+from agent_zoo.interfaces.messages import Message
+from agent_zoo.core.memory.manager import MemoryManager, MemoryManagerConfig
 
 logger = structlog.get_logger()
 
@@ -27,6 +29,13 @@ class AgentConfig(BaseModel):
     enable_monitoring: bool = Field(default=True, description="Enable monitoring and logging")
     enable_caching: bool = Field(default=False, description="Enable response caching")
     retry_attempts: int = Field(default=3, ge=0, description="Number of retry attempts on failure")
+    
+    # Memory configuration
+    memory_config: MemoryManagerConfig | None = Field(default=None, description="Memory manager configuration")
+    
+    # Fallback history settings (when no memory manager)
+    max_history_items: int = Field(default=100, ge=1, description="Maximum conversation history items")
+    history_token_limit: int | None = Field(default=None, description="Optional token limit for history")
 
     class Config:
         extra = "allow"  # Allow additional fields for specific agent configs
@@ -39,6 +48,10 @@ class BaseAgent(ABC, Generic[T]):
     This class defines the core interface that all agents must implement,
     providing a consistent API for agent interaction regardless of the
     underlying architecture (ReAct, ToT, GoT, etc.).
+    
+    Supports two modes:
+    1. With MemoryManager: Full intelligent memory management
+    2. Without MemoryManager: Simple conversation history as fallback
     """
 
     def __init__(self, config: AgentConfig | None = None):
@@ -50,21 +63,94 @@ class BaseAgent(ABC, Generic[T]):
         """
         self.config = config or AgentConfig()
         self._state = AgentState(status=AgentStatus.IDLE, max_steps=self.config.max_iterations)
+        
+        # Initialize memory manager if configured
+        self.memory: MemoryManager | None = None
+        if self.config.memory_config:
+            # Note: Derived classes should pass llm_client if using LLM router
+            self.memory = MemoryManager(self.config.memory_config)
+        
+        # Fallback: conversation history when no memory manager
+        self.conversation_history: list[Message] = []
 
         if self.config.enable_monitoring:
             self._setup_monitoring()
 
-    @abstractmethod
-    async def process(self, input_data: dict[str, Any]) -> T:
+    async def process(self, input_data: Any) -> T:
         """
-        Main processing method for the agent.
-
-        This is the core method that each agent must implement,
-        defining how it processes input and generates output.
-
+        Main processing method with automatic memory/context management.
+        
+        This method handles memory management automatically and calls
+        the derived class's _process method with appropriate context.
+        
         Args:
-            input_data: Input data for processing
+            input_data: Input data for processing (Message or dict)
+            
+        Returns:
+            Processed result of type T
+        """
+        # Convert input to Message if needed
+        if isinstance(input_data, dict):
+            message = Message(
+                role="user",
+                content=input_data.get("content", str(input_data)),
+                metadata=input_data
+            )
+        elif isinstance(input_data, Message):
+            message = input_data
+        else:
+            message = Message(role="user", content=str(input_data))
+        
+        if self.memory:
+            # WITH MEMORY MANAGER: Full intelligent memory
+            await self.memory.observe(message)
+            
+            # Get relevant context based on current message
+            context = await self.memory.get_context(message.content)
+            
+            # Call derived class implementation
+            response = await self._process(message, context)
+            
+            # Store response in memory
+            if response:
+                await self.memory.observe(response)
+            
+            # Memory manager handles consolidation internally
+            
+        else:
+            # WITHOUT MEMORY MANAGER: Simple history as context
+            # Add incoming message to history
+            self.conversation_history.append(message)
+            
+            # Trim history if too long
+            if len(self.conversation_history) > self.config.max_history_items:
+                excess = len(self.conversation_history) - self.config.max_history_items
+                self.conversation_history = self.conversation_history[excess:]
+            
+            # Provide conversation history as context
+            response = await self._process(message, self.conversation_history)
+            
+            # Add response to history if it's a Message
+            if isinstance(response, Message):
+                self.conversation_history.append(response)
+                
+                # Trim again if needed
+                if len(self.conversation_history) > self.config.max_history_items:
+                    excess = len(self.conversation_history) - self.config.max_history_items
+                    self.conversation_history = self.conversation_history[excess:]
+        
+        return response
 
+    @abstractmethod
+    async def _process(self, message: Message, context: list[Any]) -> T:
+        """
+        Core processing logic implemented by derived classes.
+        
+        Args:
+            message: Current message to process
+            context: Either list[MemoryItem] (with MemoryManager) 
+                    or list[Message] (without MemoryManager)
+                    
         Returns:
             Processed result of type T
         """
@@ -96,7 +182,7 @@ class BaseAgent(ABC, Generic[T]):
         """
         pass
 
-    async def run(self, input_data: dict[str, Any]) -> T:
+    async def run(self, input_data: Any) -> T:
         """
         Run the agent with monitoring and error handling.
 
@@ -137,6 +223,16 @@ class BaseAgent(ABC, Generic[T]):
             self._record_metrics(success=False, error=str(e))
             logger.error(f"Agent {self.config.name} failed", error=str(e))
             raise
+            
+    def clear_history(self) -> None:
+        """Clear conversation history (when not using MemoryManager)."""
+        self.conversation_history = []
+        
+    async def clear_memory(self) -> None:
+        """Clear all memory (both MemoryManager and history)."""
+        if self.memory:
+            await self.memory.clear_all()
+        self.conversation_history = []
 
     @property
     def state(self) -> AgentState:
@@ -156,28 +252,45 @@ class BaseAgent(ABC, Generic[T]):
         """Reset the agent to initial state."""
         self._state.reset()
         self._state.max_steps = self.config.max_iterations
+        # Don't clear memory/history on reset - that's a separate operation
 
     def get_full_snapshot(self) -> dict[str, Any]:
         """
         Get a full snapshot of the agent including config and state.
 
         Returns:
-            Dictionary with config and state
+            Dictionary with config, state, and memory/history
         """
-        return {
+        snapshot = {
             "config": self.config.model_dump(),
             "state": self._state.model_dump(),
         }
+        
+        if self.memory:
+            snapshot["memory"] = self.memory.get_snapshot()
+        else:
+            snapshot["conversation_history"] = [
+                msg.model_dump() for msg in self.conversation_history
+            ]
+        
+        return snapshot
 
     def load_full_snapshot(self, snapshot: dict[str, Any]) -> None:
         """
         Load agent from a full snapshot.
 
         Args:
-            snapshot: Dictionary with config and state
+            snapshot: Dictionary with config, state, and memory/history
         """
         self.config = AgentConfig.model_validate(snapshot["config"])
         self._state = AgentState.model_validate(snapshot["state"])
+        
+        if "memory" in snapshot and self.memory:
+            self.memory.load_snapshot(snapshot["memory"])
+        elif "conversation_history" in snapshot:
+            self.conversation_history = [
+                Message.model_validate(msg) for msg in snapshot["conversation_history"]
+            ]
 
     def _setup_monitoring(self) -> None:
         """Setup monitoring for the agent."""
@@ -204,8 +317,10 @@ class BaseAgent(ABC, Generic[T]):
 
     def __repr__(self) -> str:
         """String representation of the agent."""
+        memory_type = "MemoryManager" if self.memory else "History"
         return (
-            f"{self.__class__.__name__}(name={self.config.name}, status={self._state.status.value})"
+            f"{self.__class__.__name__}(name={self.config.name}, "
+            f"status={self._state.status.value}, memory={memory_type})"
         )
 
 
