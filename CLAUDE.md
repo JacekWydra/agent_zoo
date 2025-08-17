@@ -60,14 +60,14 @@ Agent Zoo is a modular Python repository providing building blocks for LLM agent
   - Granular folder structure for future expansion
 
 ### 🚧 In Progress
-- Core utilities (async helpers, monitoring, caching)
+- Memory systems (working, semantic, episodic, procedural)
 
 ### ⏳ Pending
-- Memory systems (working, semantic, episodic, procedural)
+- Core utilities (async helpers, monitoring, caching)
 - Agent implementations (ReAct, CoT, ToT, GoT)
 - Multi-agent coordination
 - Example implementations
-- Documentation
+- API documentation
 
 ## Coding Rules
 
@@ -102,6 +102,20 @@ Agent Zoo is a modular Python repository providing building blocks for LLM agent
 - Use Google-style docstrings
 - Provide usage examples in docstrings
 - Keep comments minimal and meaningful
+
+## Lessons Learned
+
+### Vibe-Coding Insights
+- **Test-Driven Fixing**: When tests fail, focus on fixing tests to match implementation rather than changing working code
+- **Incremental Progress**: Breaking down large tasks into smaller, testable chunks maintains momentum
+- **Clear Boundaries**: Being explicit about what should/shouldn't be changed helps Claude stay focused
+- **Pattern Recognition**: Claude excels at identifying and fixing systematic issues across codebase
+
+### Technical Learnings
+- **Type System**: Modern Python typing (using `|` instead of `Optional`) improves readability
+- **Pydantic v2**: Field descriptions are often required, not optional
+- **Async/Sync Duality**: Providing both async and sync interfaces increases usability
+- **Rate Limiting**: Multiple strategies can be composed for sophisticated control
 
 ## Architecture Decisions
 
